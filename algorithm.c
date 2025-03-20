@@ -332,7 +332,7 @@ void remove_seam_greedy(unsigned char *image_og, float *image_in, unsigned char 
         int strip_end = (s == num_strips - 1) ? width : strip_start + strip_width;
         
         
-        float min_val = FLT_MAX;
+        float min_val = -1;
         int min_index = strip_start;
         
         for (int j = strip_start; j < strip_end; j++) {
@@ -350,7 +350,7 @@ void remove_seam_greedy(unsigned char *image_og, float *image_in, unsigned char 
     for (int s = 0; s < num_seams; s++) {
         for (int i = 1; i < height; i++) {
             int prev_index = seam_paths[s * height + (i - 1)];
-            float min_energy = FLT_MAX;
+            float min_energy = -1;
             int best_index = prev_index;
             
             for (int offset = -1; offset <= 1; offset++) {
@@ -377,7 +377,7 @@ void remove_seam_greedy(unsigned char *image_og, float *image_in, unsigned char 
         for (int s = 0; s < num_seams; s++) {
             int seam_col = seam_paths[s * height + i];
             int index = i * width + seam_col;
-            image_in[index] = FLT_MAX;
+            image_in[index] = -1;
         }
     }
 
@@ -477,7 +477,7 @@ int main(int argc, char *argv[]){
         double iteration_end = omp_get_wtime();
         total_iteration_time += iteration_end - iteration_start;
 
-        width -= seams_to_remove; // Decrease width after removing a seam
+        width -= seams_to_remove;
 
         unsigned char *temp = image_in;
         image_in = image_carved;
