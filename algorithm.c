@@ -242,35 +242,59 @@ void calculate_pixel_energy(const unsigned char *image_in, float *image_out, int
     image_out[i * width + j] = energy;
 }
 
-void energy_map_triangle(const unsigned char *image_in, float *image_out, int width, int height, int strip_height) {
 
+void finding_paths_triangle(const float *image_in, float *image_out, int width, int height, int strip_height) {
     // Number of strips needed to cover the image
     const int num_strips = (height + strip_height - 1) / strip_height;
     const int triangle_height = strip_height - 1;
     const int triangle_width = 2 * triangle_height;
 
     // Need to process each strip sequentially, bottom up
-    for (int strip = 0; strip < num_strips; strip++) {
-        int strip_start = strip * strip_height;
-        int strip_end = MIN(strip_start + strip_height, height);
-        int strip_actual_height = strip_end - strip_start;
+    int strip_start = MIN(num_strips * strip_height, height);
+    int strip_end = strip_start - strip_height;
 
+    // Copy bottom row
+    for (int j = 0; j <= width; j++) {
+        int idx = (strip_start - 1) * width + j;
+        image_out[idx] = image_in[idx];
+    }
+
+    while (strip_start != strip_end) {
         #ifdef ENABLE_OMP
             #pragma omp parallel for schedule(dynamic)
         #endif
-        for (int triangle = 0; triangle < width; triangle += triangle_width) {
-            int triangle_end = MIN(triangle + triangle_width, width - 1);
+        for (int triangle_start = -triangle_height; triangle_start < width; triangle_start += triangle_width){
+            int triangle_end;
+            int triangle_end_ful = triangle_start + triangle_width - 1;
+            int row_start = strip_start == height ? 1 : 0;
 
-            for (int i = strip_start; i < strip_end; i++) {
-                int row_offset = i - strip_start;
-                int start_col = triangle + row_offset;
-                int end_col = MIN(triangle + triangle_width - row_offset, triangle_end);
+            if (triangle_start < 0){
+                triangle_end = triangle_height -1;
+                triangle_start = 0;
+            } else {
+                triangle_end = MIN(triangle_start + triangle_width, width) - 1;
+            }
 
-                if (start_col >= width) continue;
+            for (int i = row_start; i < triangle_height; i++) {
+                int k = (triangle_start == 0) ? 0 : i;
+                int p = (triangle_end_ful - i >= width - 1) ? 0 : i + (triangle_end_ful - triangle_end);
 
-                for (int j = start_col; j <= end_col; j++) {
-                    calculate_pixel_energy(image_in, image_out, width, height, i, j);
-                }
+                for (int j = triangle_start + k; j <= triangle_end - p; j++) {
+                    int l = (j == 0) ? 0 : 1;
+                    int r = (j == width - 1) ? 0 : 1;
+
+                    int index = (strip_start - 1 - i) * width + j;
+                    int index_down = index + width;
+                    int index_down_left = index + width - l;
+                    int index_down_right = index + width + r;
+
+                   float distance = image_in[index] + MIN3(
+                       image_out[index_down_left],
+                       image_out[index_down],
+                       image_out[index_down_right]);
+
+                   image_out[index] = distance;
+               }
             }
         }
 
@@ -282,23 +306,44 @@ void energy_map_triangle(const unsigned char *image_in, float *image_out, int wi
         #ifdef ENABLE_OMP
             #pragma omp parallel for schedule(dynamic)
         #endif
-        for (int triangle = triangle_width; triangle < width; triangle += triangle_width) {
-            int triangle_start = triangle - triangle_width;
-            int first_downward_row = strip_start + 1;
+        for (int triangle_start = triangle_height - 1; triangle_start < width; triangle_start += triangle_width){
+            int triangle_end;
+            int row_start = 1;
 
-            for (int row_offset = triangle_height - 1; row_offset >= 0; row_offset--) {
-                int i = strip_end - 1 - row_offset;
+            if (triangle_start == width - 1){
+                triangle_end = triangle_start;
+            } else if (triangle_start > width - 1) {
+                triangle_start = width - 1;
+                triangle_end = width - 1;
+                row_start = 1 + (triangle_start - width);
+            } else {
+                triangle_end = triangle_start + 1;
+            }
 
-                if (i < first_downward_row) continue;
+            int spread = 0;
+            for (int i = row_start; i <= triangle_height; i++) {
+                int k = triangle_start == 0 ? 0 : spread;
+                int p = triangle_end + spread >= width - 1 ? width - 1 : triangle_end + spread;
 
-                int start_col = triangle_start;
-                int end_col = MIN(triangle + triangle_width - row_offset, width - 1);
 
-                if (start_col > end_col) continue;
+                for (int j = triangle_start - k; j <= p; j++) {
+                   int l = j == 0 ? 0 : 1;
+                   int r = j == width - 1 ? 0 : 1;
 
-                for (int j = start_col; j <= end_col; j++) {
-                    calculate_pixel_energy(image_in, image_out, width, height, i, j);
-                }
+                   int index = (strip_start - 1 - i) * width + j;
+                   int index_down = index + width;
+                   int index_down_left = index + width - l;
+                   int index_down_right = index + width + r;
+
+                   float distance = image_in[index] + MIN3(
+                       image_out[index_down_left],
+                       image_out[index_down],
+                       image_out[index_down_right]);
+
+                   image_out[index] = distance;
+               }
+
+                spread++;
             }
         }
 
@@ -306,6 +351,9 @@ void energy_map_triangle(const unsigned char *image_in, float *image_out, int wi
         #ifdef ENABLE_OMP
             #pragma omp barrier
         #endif
+
+        strip_start = MAX(0, strip_start - strip_height);
+        strip_end = MAX(0, strip_end - strip_height);
     }
 }
 
@@ -441,20 +489,19 @@ int main(int argc, char *argv[]){
 
         // Calculate energy
         double start = omp_get_wtime();
-        // Energy map with triangles
-        if (strip_size > 0) {
-            energy_map_triangle(image_in, image_energy, width, height, strip_size);
-        } else {
-            // Normal energy map
-            energy_map(image_in, image_energy, width, height);
-        }
+        energy_map(image_in, image_energy, width, height);
         double stop = omp_get_wtime();
         total_energy_time += stop - start;
         //printf(" -> time to calculate energy: %f s\n", stop - start);
 
         // Calculate paths
         start = omp_get_wtime();
-        find_paths(image_energy, image_paths, width, height);
+        if (strip_size > 0) {
+            finding_paths_triangle(image_energy, image_paths, width, height, strip_size);
+        } else {
+            find_paths(image_energy, image_paths, width, height);
+        }
+
         stop = omp_get_wtime();
         total_paths_time += stop - start;
         //printf(" -> time to paths: %f s\n", stop - start);
